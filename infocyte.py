@@ -3,23 +3,11 @@ import requests
 # huntServer = '172.16.33.18'
 huntServer = 'demo30.infocyte.com'
 baseUrl = f'https://{huntServer}/api'
-class Session:
-	username: 'infocyte'
-	password: 'hunt'
-
 api = requests.Session()
 api.verify = False
 
-
-# class Credential():
-# 	username = 'infocyte'
-# 	password = 'hunt'
-
-# credential = Credential()
-
-
 credential = {'username':'infocyte', 'password':'hunt'}
-
+temptarget = "Austin Office (CA)"
 
 # 	get login token
 def gettoken():
@@ -29,51 +17,118 @@ def gettoken():
 	api.headers.update({'authorization':r.json()["id"]})
 	print (f'Recieved new Token: {r.json()["id"]}')
 	return r.json()["id"]
-	
 gettoken()
 
-# functions in powershell script.txt
-
-# filter is formatted:  "where":{"scanId":"'+$scanId+'"}
-
-
-def getlist(endpoint, requestfilter=""):
+def getlist(endpoint, customfilter="", include=""):
 	print(f'Retrieving {endpoint} from {huntServer}')
 	skip = 0
+	more = True
+	count = 0
 	responses = []
-	while  len(responses) % 1000 == 0:
-		api.headers.update({requestfilter "limit":"1000","skip":str(skip)})
-		r = api.get(f'{baseUrl}/{endpoint}')
+	while more:
+		count += 1
+		requestfilter = f'{{"where":{{"and":[{customfilter}]}},"include":[{include}],"limit":100,"skip":{skip}}}'
+		api.headers.update({"filter": requestfilter})
+		r = api.get(f'{baseUrl}{endpoint}')
 		r.raise_for_status()
-		print(len(r.json()))
+		more = False if len(responses) % 100 != 0 else more
+		if len(r.json()) < 1: more = False 
+		if count == 5: more = False
 		skip += len(r.json())
-		responses += r.json()
+		responses = responses + r.json()
+	print(f'Retrieved {len(responses)} records from {endpoint}')
 	return responses
 
-print (getlist("integrationscans"))
+def gettargets():
+ 	return getlist("/targets")
 
+def getqueries(targetlist):
+ 	return getlist(f"/queries",f'{{"targetList":"{targetlist}"}}','"credential","sshCredential"')
 
-# 	get scan metadata
-# 	get ic scans
-# 	Get Full FileReports on all Suspicious and Malicious objects by scanId
-# 	Get target groups
-# 	Get objects by scanId
-# 		get ic processes
-# 		get ic modules
-# 		get ic drivers
-# 		get ic autostarts
-# 		get ic memscans
-# 		get ic connections
-# 		get ic accounts
-# 		get ic hosts
-# 		get ic addreses
-# 	get tasks
-# 		get active tasks
-# 		get all tasks
-# 	get last scan id
-# 	get jobs
-# 		get active jobs
-# 		get core jobs
+print(getqueries(temptarget))
+
+def getscans(targetList):
+	requestfilter = f'{{"targetList":"{targetList}"}}'
+	return getlist("/IntegrationScans", requestfilter)
+
+def getlastscan(targetlist=""):
+	print(f'Retrieving last scan from {huntServer}')
+	targetfilter = ""
+	if targetlist != "": targetfilter = f'"where":{{"and":[{{"targetList": "{targetlist}"}}]}},'
+	requestfilter = f'{{{targetfilter}"limit":1,"order": ["scanCompletedOn desc"]}}'
+	print(requestfilter)
+	api.headers.update({"filter": requestfilter})
+	r = api.get(f'{baseUrl}/IntegrationScans/')
+	r.raise_for_status()
+	print(f'Retrieved latest scan record')
+	return r.json()[0]
+
+def getscanresults(scanid):
+	results = {}
+	endpoints = [
+		"Autostarts",
+		"Connections",
+		"Drivers",
+		"Hosts",
+		"MemScans",
+		"Modules",
+		"Processes"
+	]
+	for endpoint in endpoints:
+		objectresults = getlist(f'/Integration{endpoint}', f'{{"scanId":"{scanid}"}}')
+		results.update({endpoint: objectresults})
+
+	return results
+
+bigscanid = "ba2ae5cc-850c-4d52-a387-5737b1f18c21"
+
+def getfilereports(scanid):
+	filereports = getlist(f'/ScanReportFiles', f'{{"scanId":"{scanid}"}}')
+
+	for file in filereports:
+		# print(file)
+		filerep = getlist(f'/FileReps', f'{{"sha1":"{file["sha1"]}"}}')[0]
+		# todo signature = getlist(f'/Signatures', f'{{"sha1":"{file["sha1"]}"}}')
+		file.update(filerep)
+		print(file)	
+	return filereports
+
+def getactivetasks():
+	activetasks = getlist('/usertasks/active')
+	return activetasks
+
+def getusertasks():
+	usertasks = getlist('/usertasks')
+	return usertasks
+
+def getjobs():
+	jobs = getlist('/jobs')
+	return jobs
+
+def getactivejobs():
+	activejobfilter = f'{{"status":"Scanning"}}'
+	activejobs = getlist('/jobs', activejobfilter)
+	return activejobs
+
+def getcredentials():
+	credentials = getlist('/credentials');
+	return credentials
+
+# def getqueries():
+# 	queries = getlist('/queries', "")
+
+#done 	get scan metadata
+#done	get ic scans
+#done	Get Full FileReports on all Suspicious and Malicious objects by scanId
+#done 	Get target groups
+#done 	Get objects by scanId
+#done 	get tasks
+#done	get active tasks
+#done	get all tasks
+#done 	get last scan id
+#done 	get jobs
+#done 		get active jobs
+#done 		get core jobs
 # 	get credentials
 # 	get queries
 # 	create target list
