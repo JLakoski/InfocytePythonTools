@@ -1,13 +1,17 @@
 import requests
+import time
+import datetime
+import json
 
 # huntServer = '172.16.33.18'
-huntServer = 'demo30.infocyte.com'
+huntServer = 'localhost'
 baseUrl = f'https://{huntServer}/api'
 api = requests.Session()
 api.verify = False
 
+targetname = 'localhost'
 credential = {'username':'infocyte', 'password':'hunt'}
-temptarget = "Austin Office (CA)"
+
 
 # 	get login token
 def gettoken():
@@ -42,13 +46,45 @@ def getlist(endpoint, customfilter="", include=""):
 def gettargets():
  	return getlist("/targets")
 
-def getqueries(targetlist):
- 	return getlist(f"/queries",f'{{"targetList":"{targetlist}"}}','"credential","sshCredential"')
+def gettargetbyname(name):
+	requestfilter = f'{{"name":"{name}"}}'
+	target = getlist('/targets', requestfilter)
+	if len(target) >=1:
+		return target[0]
+	else:
+		return 0
 
-print(getqueries(temptarget))
+def createtarget(name):
+	body = {"name":name}
+	r = api.post(f'{baseUrl}/targets', data = body)
+	r.raise_for_status()
+	return r.json()
 
-def getscans(targetList):
-	requestfilter = f'{{"targetList":"{targetList}"}}'
+def getqueries(targetid):
+ 	return getlist(f"/targets/{targetid}/queries", "",'"credential","sshCredential"')
+
+def createquery(query, name, targetlistid, credentialid, sshcredentialid=""):
+	body = {
+		"name": name,
+		"value":query,
+		"targetId":targetlistid,
+		"credentialId":credentialid
+		# "sshCredentialId":sshcredentialid
+	}
+	r = api.post(f'{baseUrl}/queries', data = body)
+	r.raise_for_status()
+	return r.json()
+
+
+# query = createquery('localhost', 'integration-default: 2018-05-29 18:19:36', 'aaa73f25-d87b-499f-b370-389dbc4812ec', 'c5065ad9-06da-440c-829e-4dcb7e81c9dc')
+# print(query)
+
+def removequery(queryid):
+	r = api.delete(f'{baseUrl}/queries/{queryid}')
+	return r.json()
+
+def getscans(targetid):
+	requestfilter = f'{{"targetid":"{targetid}"}}'
 	return getlist("/IntegrationScans", requestfilter)
 
 def getlastscan(targetlist=""):
@@ -77,29 +113,27 @@ def getscanresults(scanid):
 	for endpoint in endpoints:
 		objectresults = getlist(f'/Integration{endpoint}', f'{{"scanId":"{scanid}"}}')
 		results.update({endpoint: objectresults})
-
 	return results
-
-bigscanid = "ba2ae5cc-850c-4d52-a387-5737b1f18c21"
 
 def getfilereports(scanid):
 	filereports = getlist(f'/ScanReportFiles', f'{{"scanId":"{scanid}"}}')
-
 	for file in filereports:
-		# print(file)
 		filerep = getlist(f'/FileReps', f'{{"sha1":"{file["sha1"]}"}}')[0]
 		# todo signature = getlist(f'/Signatures', f'{{"sha1":"{file["sha1"]}"}}')
 		file.update(filerep)
-		print(file)	
 	return filereports
 
-def getactivetasks():
-	activetasks = getlist('/usertasks/active')
+def getactiveusertasks():
+	activetasks = getlist('/userTasks/active')
 	return activetasks
 
 def getusertasks():
-	usertasks = getlist('/usertasks')
+	usertasks = getlist('/userTasks')
 	return usertasks
+
+def getusertask(usertaskid):
+	r = api.get(f'{baseUrl}/userTasks/{usertaskid}')
+	return r.json()
 
 def getjobs():
 	jobs = getlist('/jobs')
@@ -114,8 +148,118 @@ def getcredentials():
 	credentials = getlist('/credentials');
 	return credentials
 
-# def getqueries():
-# 	queries = getlist('/queries', "")
+def getcredentialsbyname(name):
+	credentials = getcredentials()
+	for credential in credentials:
+		if credential['name'] == name:
+			return credential
+	raise ValueError('Credential not found')
+
+def createcredential(name, username, password):
+	body = {'name': name, 'username': username, 'password': password}
+	r = api.post(f'{baseUrl}/credentials', data = body)
+	r.raise_for_status()
+	return r.json()
+
+def createenumeration(targetid, queryid):
+	body = {"queries":[queryid, queryid]}
+	r = api.post(f'{baseUrl}/targets/{targetid}/enumerate', data = body)
+	r.raise_for_status()
+	return r.json()
+
+def enumerate(targetid, queryid):
+	enumeration = createenumeration(targetid, queryid)
+	status = "Active"
+	print("Enumerating...", end='')
+	while status == "Active":
+		task = getusertask(enumeration['userTaskId'])
+		status = task['status']
+		time.sleep(3)
+		print('.', end='')
+
+	if status == "Completed":
+		print("Enumeration successful")
+		return {'status':'Completed', 'targetid': targetid, 'queryid': queryid}
+	else:
+		raise ValueError("enumeration failed")
+
+def createscan(targetid, queryid):
+	body = {'queries': [queryid, queryid]}
+	r = api.post(f'{baseUrl}/targets/{targetid}/scan', data = body)
+	r.raise_for_status()
+	return r.json()
+
+def scan(targetid, queryid):
+	scan = createscan(targetid, queryid)
+	status = "Active"
+	task = ""
+	print("Scanning...", end='')
+	while status == "Active":
+		task = getusertask(scan['userTaskId'])
+		status = task['status']
+		time.sleep(3)
+		print('.', end='')
+
+	if status == "Completed":
+		print("Scan successful")
+		return {'status':'Completed', 'targetid': targetid, 'queryid': queryid}
+	else:
+		raise ValueError("Scan failed")
+
+def createhunt(query, credentialname, targetname='integration-default'):
+	# gettoken()
+	# Create new login Token and add it to Script variable
+	target = gettargetbyname(targetname)
+	
+	if target == 0:
+		targetid = createtarget(targetname)['id']
+	else: 
+		targetid = target['id']
+	
+	credential = getcredentialsbyname(credentialname)
+	print(credential)
+	credentialid = credential['id']
+
+	queryname = f'{targetname}: {str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}'
+
+	query = createquery(query, queryname, targetid, credentialid)
+	queryid = query['id']
+
+	print(f'Hunting {query["value"]} in {target["name"]} with {credentialname}')
+
+	enumeration = enumerate(targetid, queryid)
+	scantask = scan(targetid, queryid)
+
+	removequery(queryid)
+
+	print(f'Successfully scanned {query} with {credentialname} as part of the {targetname} target list.')
+	return f'Successfully scanned {query} with {credentialname} as part of the {targetname} target list.'
+
+huntrun = createhunt('localhost', '.\\INFOCYTE', 'localhost')
+print(huntrun)
+
+
+
+
+
+
+
+
+
+
+
+
+
+# targetid = gettargets()[0]["id"]
+# scanid = createscan(targetid, queryid)
+# # enumerationid = createenumeration(targetid, queryid)
+# print(scanid)
+
+# task = getusertask(enumerationid)
+# task = getusertask('b3a62d3a-e6ab-4b2e-9d2c-f1de295f4441')
+# print(task)
+
+
 
 #done 	get scan metadata
 #done	get ic scans
@@ -129,20 +273,17 @@ def getcredentials():
 #done 	get jobs
 #done 		get active jobs
 #done 		get core jobs
-# 	get credentials
-# 	get queries
-# 	create target list
-# 	create credential
+#done 	get credentials
+#done 	get queries
+#done 	create target list
+#		create credential
 # 	create query
-# 	create enumeration for target list
-# 	create scan for target list
-# 	remove addresses from target list 
+#done 	create enumeration for target list
+#	track enumeration
+#done 	create scan for target list
+#done	track scan
+#done 	remove addresses from target list/deletequery
 # invoke hunt workflow
-	# Create new login Token and add it to Script variable
-	# Get Target Lists.  If our specified list isn't there, create it.
-	# If we don't clear the target list, we would enumerate and scan all the other addresses already in there again
-	# Create new Query for target
-	# Initiate Enumeration
-	# Track Status of Enumeration
-	# Initiate Scan
-	# Track Status of Scan
+
+
+#todo: add support for linux/sshcredential
